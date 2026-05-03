@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>GALAXY SHOOTER PRO: ULTIMATE CLONE</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+        
+        body { 
+            margin: 0; padding: 0; background: #000; overflow: hidden; 
+            touch-action: none; font-family: 'Orbitron', sans-serif;
+        }
+
+        canvas { display: block; filter: contrast(1.2) brightness(1.1); }
+
+        /* --- UI Overlay --- */
+        #game-ui {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 100; color: white;
+        }
+
+        .header {
+            display: flex; justify-content: space-between; padding: 20px;
+            background: linear-gradient(to bottom, rgba(0, 210, 255, 0.3), transparent);
+        }
+
+        .stat-label { font-size: 10px; color: #00d2ff; letter-spacing: 2px; }
+        .stat-value { font-size: 22px; font-weight: 900; text-shadow: 0 0 15px #00d2ff; }
+
+        /* --- Boss Health --- */
+        #boss-panel {
+            display: none; position: absolute; top: 80px; left: 50%;
+            transform: translateX(-50%); width: 80%; text-align: center;
+        }
+
+        .hp-bar-outer {
+            width: 100%; height: 10px; background: rgba(255, 0, 0, 0.2);
+            border: 1px solid #fff; border-radius: 5px; margin-top: 5px; overflow: hidden;
+        }
+
+        #hp-bar-inner {
+            width: 100%; height: 100%; background: linear-gradient(90deg, #f00, #ff8c00);
+            box-shadow: 0 0 10px #f00; transition: width 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* --- Screens --- */
+        .overlay-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); display: none; flex-direction: column;
+            align-items: center; justify-content: center; text-align: center;
+        }
+
+        #warning-screen { background: transparent; color: red; font-size: 30px; font-weight: 900; animation: blink 0.4s infinite; }
+        
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+        .btn-action {
+            margin-top: 30px; padding: 15px 40px; background: #00d2ff;
+            color: #000; font-weight: 900; border: none; border-radius: 50px;
+            box-shadow: 0 0 20px #00d2ff; cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-ui">
+        <div class="header">
+            <div class="score-container">
+                <div class="stat-label">DESTRUCTION SCORE</div>
+                <div id="score" class="stat-value">000000</div>
+            </div>
+            <div class="level-container" style="text-align: right;">
+                <div class="stat-label">PILOT RANK</div>
+                <div id="rank" class="stat-value">MK-I</div>
+            </div>
+        </div>
+
+        <div id="boss-panel">
+            <div style="font-size: 12px; font-weight: 700; color: #ff3e3e;">ANNIHILATOR SHIP DETECTED</div>
+            <div class="hp-bar-outer"><div id="hp-bar-inner"></div></div>
+        </div>
+
+        <div id="warning-screen" class="overlay-screen">⚠ WARNING: BOSS INBOUND ⚠</div>
+
+        <div id="death-screen" class="overlay-screen" style="pointer-events: all;">
+            <h1 style="color: #ff3e3e; font-size: 50px;">MISSION FAILED</h1>
+            <p>Final Score: <span id="final-score">0</span></p>
+            <button class="btn-action" onclick="location.reload()">RE-DEPLOY PILOT</button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        /**
+         * GALAXY SHOOTER ENGINE v2.0
+         * Developer: Zayed (AI Enhanced)
+         * Architecture: Object Oriented (OOP)
+         */
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Global Constants
+        const CONFIG = {
+            PLAYER_SPEED: 0.15,
+            BULLET_SPEED: 14,
+            MAX_STARS: 120,
+            LEVEL_UP_SCORE: 500,
+            FPS: 60
+        };
+
+        // Game State
+        let state = {
+            score: 0,
+            level: 1,
+            gameActive: true,
+            bossActive: false,
+            frame: 0
+        };
+
+        // --- UTILS ---
+        const getDist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+
+        // --- PARTICLE SYSTEM ---
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x; this.y = y;
+                this.vx = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8;
+                this.life = 1.0;
+                this.color = color;
+                this.size = Math.random() * 4;
+            }
+            update() { this.x += this.vx; this.y += this.vy; this.life -= 0.02; }
+            draw() {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // --- PLAYER ENGINE ---
+        class Player {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = canvas.height - 100;
+                this.w = 60; this.h = 70;
+                this.targetX = this.x;
+                this.targetY = this.y;
+            }
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                // Engine Glow
+                const glow = ctx.createRadialGradient(0, 30, 0, 0, 30, 20);
+                glow.addColorStop(0, 'rgba(0, 255, 255, 0.8)');
+                glow.addColorStop(1, 'transparent');
+                ctx.fillStyle = glow;
+                ctx.fillRect(-15, 20, 30, 40);
+
+                // Body (Galaxy Attack Style)
+                ctx.shadowBlur = 20; ctx.shadowColor = "#00d2ff";
+                ctx.fillStyle = "#fff";
+                ctx.beginPath();
+                ctx.moveTo(0, -40); // Nose
+                ctx.lineTo(-30, 10); ctx.lineTo(-40, 30); // Left wing
+                ctx.lineTo(-10, 20); ctx.lineTo(10, 20);  // Tail
+                ctx.lineTo(40, 30); ctx.lineTo(30, 10);   // Right wing
+                ctx.closePath(); ctx.fill();
+                
+                // Details
+                ctx.fillStyle = "#00d2ff";
+                ctx.fillRect(-4, -10, 8, 15);
+                ctx.restore();
+            }
+            update() {
+                this.x += (this.targetX - this.x) * CONFIG.PLAYER_SPEED;
+                this.y += (this.targetY - this.y) * CONFIG.PLAYER_SPEED;
+            }
+        }
+
+        // --- ENEMY CLASSES ---
+        class Enemy {
+            constructor(type) {
+                this.x = Math.random() * (canvas.width - 60) + 30;
+                this.y = -100;
+                this.type = type; // 'scout', 'interceptor'
+                this.hp = type === 'interceptor' ? 4 : 2;
+                this.speed = 3 + Math.random() * 2;
+                this.sinVal = 0;
+            }
+            update() {
+                this.y += this.speed;
+                if (this.type === 'interceptor') {
+                    this.sinVal += 0.05;
+                    this.x += Math.sin(this.sinVal) * 3;
+                }
+            }
+            draw() {
+                ctx.fillStyle = this.type === 'interceptor' ? "#ff00ff" : "#ff4757";
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y + 20);
+                ctx.lineTo(this.x - 20, this.y - 20);
+                ctx.lineTo(this.x + 20, this.y - 20);
+                ctx.fill();
+            }
+        }
+
+        class Boss {
+            constructor() {
+                this.x = canvas.width / 2;
+                this.y = -200;
+                this.w = 300; this.h = 120;
+                this.hp = 150 + (state.level * 50);
+                this.maxHp = this.hp;
+                this.dir = 1;
+                this.angle = 0;
+            }
+            update() {
+                if (this.y < 120) this.y += 2;
+                this.x += this.dir * 3;
+                if (this.x > canvas.width - 150 || this.x < 150) this.dir *= -1;
+            }
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.fillStyle = "#4834d4";
+                ctx.fillRect(-this.w/2, 0, this.w, 40); // Wings
+                ctx.fillStyle = "#686de0";
+                ctx.beginPath();
+                ctx.moveTo(0, -60); ctx.lineTo(-60, 100); ctx.lineTo(60, 100);
+                ctx.fill();
+                // Glowing Eyes
+                ctx.fillStyle = "#f09";
+                ctx.shadowBlur = 20; ctx.shadowColor = "red";
+                ctx.beginPath(); ctx.arc(-40, 40, 15, 0, Math.PI*2); ctx.fill();
+                ctx.beginPath(); ctx.arc(40, 40, 15, 0, Math.PI*2); ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- OBJECT POOLS ---
+        const pilot = new Player();
+        let bullets = [];
+        let enemies = [];
+        let enemyBullets = [];
+        let particles = [];
+        let stars = [];
+        let boss = null;
+
+        for (let i = 0; i < CONFIG.MAX_STARS; i++) {
+            stars.push({ x: Math.random() * canvas.width, y: Math.random() * canvas.height, s: Math.random() * 2 });
+        }
+
+        // --- CORE LOGIC ---
+        function spawnManager() {
+            if (!state.gameActive || state.bossActive) return;
+            const type = Math.random() > 0.8 ? 'interceptor' : 'scout';
+            enemies.push(new Enemy(type));
+            setTimeout(spawnManager, Math.max(200, 1000 - state.score/20));
+        }
+
+        function fireEnemyBullet(ex, ey, isBoss = false) {
+            // Target tracking AI
+            const angle = Math.atan2(pilot.y - ey, pilot.x - ex);
+            enemyBullets.push({
+                x: ex, y: ey,
+                vx: Math.cos(angle) * (isBoss ? 6 : 4),
+                vy: Math.sin(angle) * (isBoss ? 6 : 4),
+                size: isBoss ? 10 : 6
+            });
+        }
+
+        function handleCollisions() {
+            // Player bullets -> Enemies
+            bullets.forEach((b, bi) => {
+                enemies.forEach((e, ei) => {
+                    if (getDist(b.x, b.y, e.x, e.y) < 30) {
+                        e.hp--;
+                        bullets.splice(bi, 1);
+                        if (e.hp <= 0) {
+                            for(let i=0; i<10; i++) particles.push(new Particle(e.x, e.y, "#ff4757"));
+                            enemies.splice(ei, 1);
+                            state.score += 20;
+                            if (state.score > 0 && state.score % CONFIG.LEVEL_UP_SCORE === 0) triggerBoss();
+                        }
+                    }
+                });
+
+                // Hit Boss
+                if (boss && b.x > boss.x - 150 && b.x < boss.x + 150 && b.y < boss.y + 100) {
+                    boss.hp--; bullets.splice(bi, 1);
+                    document.getElementById('hp-bar-inner').style.width = (boss.hp / boss.maxHp * 100) + '%';
+                    if (boss.hp <= 0) {
+                        for(let i=0; i<50; i++) particles.push(new Particle(boss.x, boss.y, "white"));
+                        boss = null; state.bossActive = false;
+                        document.getElementById('boss-panel').style.display = 'none';
+                        state.level++;
+                        document.getElementById('rank').innerText = "MK-" + (state.level === 2 ? 'II' : 'MAX');
+                    }
+                }
+            });
+
+            // Enemy bullets -> Player
+            enemyBullets.forEach((eb, i) => {
+                if (getDist(eb.x, eb.y, pilot.x, pilot.y) < 25) endGame();
+            });
+        }
+
+        function triggerBoss() {
+            state.bossActive = true;
+            document.getElementById('warning-screen').style.display = 'flex';
+            setTimeout(() => {
+                document.getElementById('warning-screen').style.display = 'none';
+                document.getElementById('boss-panel').style.display = 'block';
+                boss = new Boss();
+            }, 3000);
+        }
+
+        function update() {
+            if (!state.gameActive) return;
+
+            state.frame++;
+            pilot.update();
+
+            // Auto Shoot
+            if (state.frame % 8 === 0) {
+                bullets.push({ x: pilot.x, y: pilot.y - 40 });
+                if (state.level >= 2) {
+                    bullets.push({ x: pilot.x - 25, y: pilot.y });
+                    bullets.push({ x: pilot.x + 25, y: pilot.y });
+                }
+            }
+
+            bullets.forEach((b, i) => { b.y -= CONFIG.BULLET_SPEED; if (b.y < 0) bullets.splice(i, 1); });
+
+            enemies.forEach((e, i) => {
+                e.update();
+                if (Math.random() < 0.015) fireEnemyBullet(e.x, e.y);
+                if (e.y > canvas.height) enemies.splice(i, 1);
+            });
+
+            enemyBullets.forEach((eb, i) => {
+                eb.x += eb.vx; eb.y += eb.vy;
+                if (eb.y > canvas.height || eb.x < 0 || eb.x > canvas.width) enemyBullets.splice(i, 1);
+            });
+
+            if (boss) {
+                boss.update();
+                if (state.frame % 30 === 0) fireEnemyBullet(boss.x, boss.y + 50, true);
+            }
+
+            particles.forEach((p, i) => { p.update(); if (p.life <= 0) particles.splice(i, 1); });
+            stars.forEach(s => { s.y += 3; if (s.y > canvas.height) s.y = 0; });
+
+            handleCollisions();
+            document.getElementById('score').innerText = state.score.toString().padStart(6, '0');
+        }
+
+        function draw() {
+            ctx.fillStyle = "#00060d";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Stars
+            ctx.fillStyle = "#fff";
+            stars.forEach(s => ctx.fillRect(s.x, s.y, s.s, s.s));
+
+            particles.forEach(p => p.draw());
+
+            // Player Bullets
+            ctx.fillStyle = "#00ffff";
+            ctx.shadowBlur = 10; ctx.shadowColor = "cyan";
+            bullets.forEach(b => ctx.fillRect(b.x - 2, b.y, 4, 20));
+            ctx.shadowBlur = 0;
+
+            enemies.forEach(e => e.draw());
+
+            // Enemy Bullets
+            enemyBullets.forEach(eb => {
+                ctx.fillStyle = "#fff200";
+                ctx.beginPath(); ctx.arc(eb.x, eb.y, eb.size, 0, Math.PI * 2); ctx.fill();
+            });
+
+            if (boss) boss.draw();
+            pilot.draw();
+        }
+
+        function endGame() {
+            state.gameActive = false;
+            document.getElementById('death-screen').style.display = 'flex';
+            document.getElementById('final-score').innerText = state.score;
+        }
+
+        // --- CONTROLS ---
+        window.addEventListener('touchmove', (e) => {
+            state.gameActive && (pilot.targetX = e.touches[0].clientX, pilot.targetY = e.touches[0].clientY - 50);
+        });
+
+        function engine() { update(); draw(); requestAnimationFrame(engine); }
+        spawnManager(); engine();
+    </script>
+</body>
+</html>
